@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { getSessionByIncidentId, getToolCallsBySessionId, getIncidentById } from "@/lib/db";
 
 export async function GET(
   request: NextRequest,
@@ -17,43 +17,48 @@ export async function GET(
   const stream = new ReadableStream({
     async start(controller) {
       let lastToolCallId = 0;
+      let toolCallCounter = 0;
 
-      const sendEvent = (data: unknown) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+      const sendEvent = (eventType: string, data: unknown) => {
+        controller.enqueue(encoder.encode(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`));
       };
 
       const poll = async () => {
         try {
-          const session = await prisma.agentSession.findUnique({
-            where: { incidentId },
-          });
+          const session = await getSessionByIncidentId(incidentId);
 
           if (!session) {
-            sendEvent({ type: "waiting", message: "Agent not started" });
+            sendEvent("message", { type: "waiting", message: "Agent not started" });
             return true;
           }
 
-          const newCalls = await prisma.toolCall.findMany({
-            where: { sessionId: session.id, id: { gt: lastToolCallId } },
-            orderBy: { createdAt: "asc" },
-          });
+          const allCalls = await getToolCallsBySessionId(session.id);
+          const newCalls = allCalls.filter(call => call.id > lastToolCallId);
 
           for (const call of newCalls) {
-            sendEvent({
-              type: "tool_call",
+            let parsedArgs = {};
+            try {
+              parsedArgs = call.args ? JSON.parse(call.args) : {};
+            } catch {
+              parsedArgs = { raw: call.args };
+            }
+            
+            toolCallCounter++;
+            sendEvent("tool_call", {
+              id: call.id,
               name: call.name,
-              args: JSON.parse(call.args),
+              args: parsedArgs,
               result: call.result,
               error: call.error,
+              status: call.error ? 'failed' : call.result ? 'completed' : 'running',
             });
             lastToolCallId = call.id;
           }
 
-          if (session.status === "completed" || session.status === "failed") {
-            const incident = await prisma.incident.findUnique({
-              where: { id: incidentId },
-            });
-            sendEvent({
+          const terminalStatuses = ["completed", "failed", "dry_run", "clone_failed"];
+          if (terminalStatuses.includes(session.status)) {
+            const incident = await getIncidentById(incidentId);
+            sendEvent("message", {
               type: "done",
               status: session.status,
               incidentStatus: incident?.status,

@@ -105,20 +105,46 @@ export async function executeCommitChanges(
   return `Committed: ${args.message}`;
 }
 
+export class PrSkippedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PrSkippedError";
+  }
+}
+
 export async function executeCreatePR(
   ctx: ToolContext,
   args: { title: string; body: string }
 ): Promise<string> {
-  await ctx.git.push("origin", ctx.branch, ["--set-upstream"]);
-  const { data } = await ctx.octokit.pulls.create({
-    owner: ctx.owner,
-    repo: ctx.repo,
-    title: args.title,
-    body: args.body,
-    head: ctx.branch,
-    base: "main",
-  });
-  return `PR created: ${data.html_url}`;
+  // Check for token - if missing, skip PR creation (dry-run mode)
+  if (!process.env.GITHUB_TOKEN) {
+    throw new PrSkippedError(
+      `[DRY-RUN] No GITHUB_TOKEN set. Fix was applied locally but PR not created. ` +
+      `Title: "${args.title}" | Files modified can be seen in previous tool calls.`
+    );
+  }
+
+  try {
+    await ctx.git.push("origin", ctx.branch, ["--set-upstream"]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to push branch: ${message}`);
+  }
+
+  try {
+    const { data } = await ctx.octokit.pulls.create({
+      owner: ctx.owner,
+      repo: ctx.repo,
+      title: args.title,
+      body: args.body,
+      head: ctx.branch,
+      base: "main",
+    });
+    return `PR created: ${data.html_url}`;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to create PR: ${message}`);
+  }
 }
 
 export async function executeTool(

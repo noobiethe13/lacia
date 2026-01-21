@@ -36,7 +36,7 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
     "**/*.mts"
-  ],
+, "test-gemini-api.ts"  ],
   "exclude": [
     "node_modules",
     "prisma.config.ts"

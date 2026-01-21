@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { createIncident } from "@/lib/db";
 import type { IncidentPayload } from "@/types";
 
 export async function POST(request: NextRequest) {
@@ -13,14 +13,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const incident = await prisma.incident.create({
-      data: {
-        errorLog: body.error_line,
-        hostname: body.hostname || "unknown",
-        repoUrl: body.repo_url || null,
-        context: body.context ? JSON.stringify(body.context) : null,
-        status: "open",
-      },
+    const incident = await createIncident({
+      errorLog: body.error_line,
+      hostname: body.hostname || "unknown",
+      repoUrl: body.repo_url || undefined,
+      context: body.context ? JSON.stringify(body.context) : undefined,
     });
 
     if (body.repo_url) {

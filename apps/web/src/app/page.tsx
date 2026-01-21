@@ -1,158 +1,134 @@
-import { prisma } from "@/lib/prisma";
-import type { Incident } from "@/types";
+import { getIncidents, getSessionByIncidentId } from "@/lib/db";
+import { DashboardOverview } from "@/components/dashboard/overview";
+import { cn } from "@/lib/utils";
+import Image from "next/image";
 
-function formatDate(date: Date): string {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
+export const dynamic = "force-dynamic";
 
-function StatusBadge({ status }: { status: string }) {
-  const colors: Record<string, string> = {
-    open: "bg-red-500/20 text-red-400 border-red-500/30",
-    investigating: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
-    resolved: "bg-green-500/20 text-green-400 border-green-500/30",
-    closed: "bg-gray-500/20 text-gray-400 border-gray-500/30",
-  };
-
-  return (
-    <span
-      className={`px-2 py-1 text-xs font-medium rounded-full border ${colors[status] || colors.open}`}
-    >
-      {status}
-    </span>
-  );
-}
-
-export default async function Dashboard() {
-  let incidents: Incident[] = [];
-  let error: string | null = null;
-
-  try {
-    const data = await prisma.incident.findMany({
-      orderBy: { createdAt: "desc" },
-      take: 10,
-    });
-    incidents = data.map((i) => ({
-      id: i.id,
-      errorLog: i.errorLog,
-      status: i.status,
-      hostname: i.hostname,
-      repoUrl: i.repoUrl,
-      context: i.context,
-      prCreated: i.prCreated,
-      prUrl: i.prUrl,
-      createdAt: i.createdAt,
-    }));
-  } catch (e) {
-    error = "Failed to connect to database. Run `npx prisma db push` first.";
-    console.error(e);
+async function getStats() {
+  const incidents = await getIncidents();
+  const total = incidents.length;
+  
+  // Get session statuses
+  let active = 0;
+  let resolved = 0;
+  let failed = 0;
+  
+  for (const incident of incidents) {
+    const session = await getSessionByIncidentId(incident.id);
+    if (session) {
+      if (session.status === "running") active++;
+      else if (session.status === "completed" || session.status === "dry_run") resolved++;
+      else if (session.status === "failed" || session.status === "clone_failed") failed++;
+    }
   }
 
+  return { total, active, resolved, failed };
+}
+
+async function getRecentIncidents() {
+  const incidents = await getIncidents();
+  
+  // Get session for each incident
+  const incidentsWithSessions = await Promise.all(
+    incidents.slice(0, 50).map(async (inc) => {
+      const session = await getSessionByIncidentId(inc.id);
+      return { ...inc, session };
+    })
+  );
+  
+  return incidentsWithSessions;
+}
+
+export default async function DashboardPage() {
+  const stats = await getStats();
+  const incidents = await getRecentIncidents();
+  
+  const formattedIncidents = incidents.map(inc => ({
+    id: inc.id,
+    slug: `INC-${inc.id}`,
+    repo_url: inc.repoUrl || "Unknown Repo",
+    context: inc.context || inc.errorLog || "No context provided",
+    payload: "{}",
+    created_at: inc.createdAt.toISOString(),
+    status: inc.status,
+    agent_session: inc.session ? [{
+       status: inc.session.status,
+       started_at: inc.session.startedAt ? inc.session.startedAt.toISOString() : new Date().toISOString()
+    }] : []
+  }));
+
+  const maxConcurrency = 10;
+  const activePercentage = Math.min((stats.active / maxConcurrency) * 100, 100);
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950">
-      <div className="max-w-6xl mx-auto px-6 py-12">
-        <header className="mb-12">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
-              <svg
-                className="w-6 h-6 text-white"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"
-                />
-              </svg>
-            </div>
-            <h1 className="text-3xl font-bold text-white tracking-tight">
-              Project Lacia
-            </h1>
+    <div className="min-h-screen bg-background text-foreground selection:bg-primary/20">
+      {/* Premium Gradient Background */}
+      <div className="fixed inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-500/10 via-background to-background pointer-events-none" />
+      
+      <div className="relative max-w-7xl mx-auto p-8 space-y-10">
+        {/* Header */}
+        <header className="flex items-center justify-between pb-6 border-b border-border/40 backdrop-blur-sm sticky top-0 z-10 bg-background/80 -mx-8 px-8 py-4 transition-all">
+          <div className="flex items-center gap-4">
+             <div className="relative h-10 w-10 shadow-lg rounded-xl overflow-hidden ring-1 ring-white/10">
+                <Image src="/icon.png" alt="Lacia Icon" fill className="object-cover" />
+             </div>
+             <div>
+               <h1 className="text-2xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-foreground to-foreground/70">Lacia</h1>
+             </div>
           </div>
-          <p className="text-gray-400">
-            Autonomous SRE Agent — Incident Dashboard
-          </p>
+          <div className="flex items-center gap-4 text-sm text-muted-foreground">
+             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/5 border border-emerald-500/20 shadow-[0_0_15px_-3px_rgba(16,185,129,0.15)]">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                <span className="text-emerald-600 font-medium text-xs">System Operational</span>
+             </div>
+          </div>
         </header>
 
-        <div className="bg-gray-900/50 backdrop-blur-sm rounded-2xl border border-gray-800 overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-white">
-              Recent Incidents
-            </h2>
-            <span className="text-sm text-gray-500">Last 10</span>
-          </div>
-
-          {error ? (
-            <div className="px-6 py-12 text-center">
-              <p className="text-red-400 mb-2">{error}</p>
-              <code className="text-sm text-gray-500 bg-gray-800 px-3 py-1 rounded">
-                npx prisma db push
-              </code>
-            </div>
-          ) : incidents.length === 0 ? (
-            <div className="px-6 py-16 text-center">
-              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gray-800 flex items-center justify-center">
-                <svg
-                  className="w-8 h-8 text-gray-600"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.5}
-                    d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-              </div>
-              <p className="text-gray-400 font-medium">No incidents yet</p>
-              <p className="text-gray-500 text-sm mt-1">
-                System is running smoothly
-              </p>
-            </div>
-          ) : (
-            <div className="divide-y divide-gray-800">
-              {incidents.map((incident) => (
-                <div
-                  key={incident.id}
-                  className="px-6 py-4 hover:bg-gray-800/30 transition-colors"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-3 mb-2">
-                        <span className="text-gray-500 text-sm font-mono">
-                          #{incident.id}
-                        </span>
-                        <StatusBadge status={incident.status} />
-                        <span className="text-gray-600 text-xs">
-                          {incident.hostname}
-                        </span>
-                      </div>
-                      <p className="text-gray-300 font-mono text-sm truncate">
-                        {incident.errorLog}
-                      </p>
-                    </div>
-                    <time className="text-gray-500 text-sm whitespace-nowrap">
-                      {formatDate(new Date(incident.createdAt))}
-                    </time>
+        {/* Overview Stats Bento Grid */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+           {[
+             { label: "Total Incidents", value: stats.total, sub: "Lifetime count", color: "text-foreground" },
+             { label: "Active Agents", value: stats.active, sub: `${activePercentage}% Capacity`, color: "text-indigo-500", progress: true },
+             { label: "Resolved", value: stats.resolved, sub: "Successfully fixed", color: "text-emerald-500" },
+             { label: "Failed", value: stats.failed, sub: "Requires intervention", color: "text-red-500" },
+           ].map((stat, i) => (
+             <div key={i} className="group relative p-6 rounded-2xl border border-border bg-card/50 hover:bg-card/80 transition-all duration-300 hover:shadow-lg hover:shadow-primary/5 hover:-translate-y-1 backdrop-blur-sm">
+                <div className="flex flex-col h-full justify-between">
+                  <div>
+                    <div className="text-sm font-medium text-muted-foreground mb-2">{stat.label}</div>
+                    <div className={cn("text-4xl font-bold tracking-tight", stat.color)}>{stat.value}</div>
+                  </div>
+                  
+                  <div className="mt-4">
+                     {stat.progress ? (
+                       <div className="space-y-2">
+                         <div className="h-1.5 w-full bg-muted/50 rounded-full overflow-hidden">
+                            <div 
+                              className="h-full bg-indigo-500 rounded-full transition-all duration-1000 ease-out" 
+                              style={{ width: `${activePercentage}%` }}
+                            />
+                         </div>
+                         <div className="text-xs text-muted-foreground text-right font-medium">{stat.sub}</div>
+                       </div>
+                     ) : (
+                       <div className="text-xs text-muted-foreground font-medium flex items-center gap-1 group-hover:text-foreground transition-colors">
+                         {stat.sub}
+                       </div>
+                     )}
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
+             </div>
+           ))}
         </div>
 
-        <footer className="mt-8 text-center text-gray-600 text-sm">
-          Powered by Gemini 3 Agent
-        </footer>
+        {/* Main Content */}
+        <div className="relative z-0">
+           <DashboardOverview initialIncidents={formattedIncidents} stats={stats} />
+        </div>
       </div>
     </div>
   );
