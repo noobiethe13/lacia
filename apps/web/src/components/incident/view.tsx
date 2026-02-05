@@ -28,7 +28,6 @@ interface IncidentViewProps {
 }
 
 function ToolCallItem({ tool }: { tool: ToolCallRecord }) {
-  // Auto-open if running, but user can still close it
   const [isOpen, setIsOpen] = useState(tool.status === "running");
   const isPending = tool.status === "running";
   const isFailed = tool.status === "failed";
@@ -86,7 +85,6 @@ export function IncidentView({ incidentId, initialLogs, initialToolCalls, initia
   
   const allLogs = [...initialLogs, ...liveLogs];
   
-  // For tool calls, we need to merge updates.
   const toolsMap = new Map(initialToolCalls.map(t => [t.id, t]));
   liveToolCalls.forEach(t => toolsMap.set(t.id, t));
   const allTools = Array.from(toolsMap.values()).sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
@@ -183,7 +181,6 @@ export function IncidentView({ incidentId, initialLogs, initialToolCalls, initia
                    { id: 3, label: "Fix Implementation", desc: "Applying code changes" },
                    { id: 4, label: "Verification", desc: "Running tests & validation" },
                  ].map((step, idx) => {
-                   // Infer current step from tool call count
                    let isActive = false;
                    let isCompleted = false;
                    

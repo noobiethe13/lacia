@@ -1,6 +1,3 @@
-// Shared type definitions - db.ts re-exports these
-// Keep types centralized here to avoid duplication
-
 // ==================== API PAYLOAD TYPES ====================
 
 export interface IncidentPayload {

@@ -11,8 +11,6 @@ type SqlParams = SqlValue[];
 // Database path
 const DB_PATH = process.env.DATABASE_PATH || path.join(process.cwd(), 'data', 'lacia.db');
 
-// Use globalThis to persist DB across Next.js module reloads in production
-// This is the standard pattern for database connections in Next.js
 const globalForDb = globalThis as typeof globalThis & {
   sqlJsDb: Database | null;
   sqlJs: Awaited<ReturnType<typeof initSqlJs>> | null;

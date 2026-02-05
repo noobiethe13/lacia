@@ -36,11 +36,7 @@ export function detectProvider(repoUrl: string): GitProvider {
  */
 export function parseRepoUrl(repoUrl: string): RepoInfo {
   const provider = detectProvider(repoUrl);
-  
-  // Extract owner/repo from URL patterns like:
-  // https://github.com/owner/repo.git
-  // https://gitlab.com/owner/repo
-  // https://bitbucket.org/workspace/repo
+
   const match = repoUrl.match(/(?:https?:\/\/)?(?:www\.)?(?:github\.com|gitlab\.com|bitbucket\.org)\/([^/]+)\/([^/.]+)/);
   
   if (!match) {

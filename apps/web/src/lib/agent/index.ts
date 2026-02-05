@@ -85,7 +85,6 @@ export async function runAgent(incidentId: number): Promise<void> {
         },
       });
 
-      // Verbose logging: log full response structure
       const responseText = response.text || "";
       const functionCalls = response.functionCalls;
       const modelParts = response.candidates?.[0]?.content?.parts || [];
@@ -93,30 +92,25 @@ export async function runAgent(incidentId: number): Promise<void> {
       console.log(`[Agent] Response received - Text: ${responseText.substring(0, 200)}${responseText.length > 200 ? "..." : ""}`);
       console.log(`[Agent] Function calls: ${functionCalls?.length || 0}, Parts: ${modelParts.length}`);
 
-      // Log ALL text parts from the response (captures reasoning, thoughts, etc.)
       for (let i = 0; i < modelParts.length; i++) {
         const part = modelParts[i] as Record<string, unknown>;
         
-        // Log text parts (reasoning/thoughts)
         if (part.text && typeof part.text === "string" && part.text.trim()) {
           await logAgentMessage(incidentId, "thought", part.text);
           console.log(`[Agent] Part ${i}: Thought logged (${(part.text as string).length} chars)`);
         }
         
-        // Log function call parts for visibility
         if (part.functionCall) {
           const fc = part.functionCall as { name?: string; args?: unknown };
           console.log(`[Agent] Part ${i}: Function call - ${fc.name || "unknown"}`);
         }
         
-        // Log any thought signatures if present (Gemini 2.0+ feature)
         if (part.thoughtSignature) {
           await logAgentMessage(incidentId, "thought_signature", JSON.stringify({ index: i, hasSignature: true }));
           console.log(`[Agent] Part ${i}: Has thought signature`);
         }
       }
 
-      // Also log the combined response text if not already covered by parts
       if (responseText && responseText.trim() && modelParts.length === 0) {
         await logAgentMessage(incidentId, "gemini_response", responseText);
         console.log(`[Agent] Logged Gemini text response to database`);
@@ -127,8 +121,6 @@ export async function runAgent(incidentId: number): Promise<void> {
         await logAgentMessage(incidentId, "turn_end", JSON.stringify({ turn: turn + 1, reason: "no_function_calls" }));
         break;
       }
-
-      // Get the raw parts from the response to preserve thoughtSignature
 
       const functionResponseParts: Part[] = [];
 
@@ -179,7 +171,6 @@ export async function runAgent(incidentId: number): Promise<void> {
         }
       }
 
-      // Preserve original parts (includes thoughtSignature) instead of reconstructing
       contents.push({
         role: "model",
         parts: modelParts as Part[],
@@ -236,7 +227,6 @@ async function handleFinish(
 
   if (args.reason === "fixed") {
     if (prSkipped) {
-      // Fix was applied but PR was not created (dry-run mode)
       status = "pr_skipped";
       sessionStatus = "dry_run";
     } else {
@@ -266,9 +256,6 @@ async function handleFinish(
 }
 
 async function getPrUrl(ctx: ToolContext): Promise<string | null> {
-  // PR URL is now captured directly from createPullRequest result
-  // This function is kept for compatibility but returns null
-  // The actual PR URL is logged in finish tool call output
   return null;
 }
 
