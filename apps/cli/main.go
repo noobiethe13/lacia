@@ -1,11 +1,47 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
+
+// Duplicate prevention
+var (
+	lastErrorHash    string
+	lastErrorTime    time.Time
+	cooldownDuration = 30 * time.Second
+)
+
+func hashError(event LogEvent) string {
+	// Hash the error line and first few context lines
+	data := event.Line
+	if len(event.Context) > 3 {
+		for i := 0; i < 3; i++ {
+			data += event.Context[i]
+		}
+	}
+	hash := sha256.Sum256([]byte(data))
+	return hex.EncodeToString(hash[:8]) // First 8 bytes for shorter hash
+}
+
+func isDuplicate(event LogEvent) bool {
+	hash := hashError(event)
+	now := time.Now()
+
+	if hash == lastErrorHash && now.Sub(lastErrorTime) < cooldownDuration {
+		fmt.Printf("Skipping duplicate error (same error within %v)\n", cooldownDuration)
+		return true
+	}
+
+	lastErrorHash = hash
+	lastErrorTime = now
+	return false
+}
 
 func main() {
 	var cfg *Config
@@ -44,6 +80,11 @@ func main() {
 
 	go func() {
 		for event := range events {
+			// Duplicate prevention - skip if same error within cooldown
+			if isDuplicate(event) {
+				continue
+			}
+
 			if err := client.Send(event); err != nil {
 				fmt.Fprintf(os.Stderr, "Send failed: %v\n", err)
 			}

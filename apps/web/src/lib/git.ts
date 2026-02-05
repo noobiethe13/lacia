@@ -3,6 +3,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
 import * as crypto from "crypto";
+import { getAuthenticatedCloneUrl, detectProvider } from "./git-provider";
 
 export type CloneErrorCode = "auth_required" | "not_found" | "network" | "unknown";
 
@@ -21,7 +22,7 @@ function classifyGitError(error: unknown): CloneError {
   const lower = message.toLowerCase();
 
   if (lower.includes("authentication") || lower.includes("401") || lower.includes("403")) {
-    return new CloneError("auth_required", "Repository requires authentication. Set GITHUB_TOKEN for private repos.");
+    return new CloneError("auth_required", "Repository requires authentication. Set GIT_TOKEN for private repos.");
   }
   if (lower.includes("not found") || lower.includes("404") || lower.includes("does not exist")) {
     return new CloneError("not_found", "Repository not found. Check the URL is correct.");
@@ -32,14 +33,15 @@ function classifyGitError(error: unknown): CloneError {
   return new CloneError("unknown", message);
 }
 
-export async function cloneRepo(repoUrl: string, token: string): Promise<string> {
+export async function cloneRepo(repoUrl: string, token?: string): Promise<string> {
   const workDir = path.join(os.tmpdir(), `lacia-${crypto.randomBytes(8).toString("hex")}`);
   await fs.mkdir(workDir, { recursive: true });
 
-  let authUrl = repoUrl;
-  if (token && repoUrl.startsWith("https://github.com")) {
-    authUrl = repoUrl.replace("https://github.com", `https://${token}@github.com`);
-  }
+  // Use multi-provider authenticated URL
+  const authUrl = getAuthenticatedCloneUrl(repoUrl, token);
+  const provider = detectProvider(repoUrl);
+  
+  console.log(`[Git] Cloning from ${provider}: ${repoUrl}`);
 
   try {
     const git = simpleGit();

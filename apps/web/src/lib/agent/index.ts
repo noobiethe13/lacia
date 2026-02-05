@@ -13,7 +13,7 @@ import { toolDeclarations } from "./tools";
 import { SYSTEM_PROMPT, buildInitialPrompt } from "./prompt";
 import { executeTool, ToolContext, PrSkippedError } from "./executor";
 import { cloneRepo, buildFileTree, cleanup, CloneError } from "@/lib/git";
-import { createOctokit, parseRepoUrl } from "@/lib/github";
+import { parseRepoUrl } from "@/lib/git-provider";
 import simpleGit from "simple-git";
 
 const MAX_TURNS = 30;
@@ -37,8 +37,11 @@ export async function runAgent(incidentId: number): Promise<void> {
   let prSkipped = false; // Track if PR was skipped (dry-run mode)
 
   try {
-    const { owner, repo } = parseRepoUrl(incident.repoUrl);
-    const token = process.env.GITHUB_TOKEN || "";
+    const repoInfo = parseRepoUrl(incident.repoUrl);
+    const token = process.env.GIT_TOKEN || "";
+
+    console.log(`[Agent] Detected git provider: ${repoInfo.provider}`);
+    console.log(`[Agent] Repository: ${repoInfo.owner}/${repoInfo.repo}`);
 
     workDir = await cloneRepo(incident.repoUrl, token);
     
@@ -51,16 +54,13 @@ export async function runAgent(incidentId: number): Promise<void> {
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     const git = simpleGit(workDir);
-    const octokit = createOctokit(token);
 
     const ctx: ToolContext = {
       workDir,
       repoUrl: incident.repoUrl,
-      owner,
-      repo,
+      repoInfo,
       branch: "main",
       git,
-      octokit,
     };
 
     const contents: Content[] = [
@@ -72,6 +72,9 @@ export async function runAgent(incidentId: number): Promise<void> {
 
     for (let turn = 0; turn < MAX_TURNS; turn++) {
       console.log(`[Agent] Turn ${turn + 1}/${MAX_TURNS} - Calling Gemini...`);
+      
+      // Log turn start
+      await logAgentMessage(incidentId, "turn_start", JSON.stringify({ turn: turn + 1, maxTurns: MAX_TURNS }));
       
       const response = await ai.models.generateContent({
         model: "gemini-3-pro-preview",
@@ -90,14 +93,38 @@ export async function runAgent(incidentId: number): Promise<void> {
       console.log(`[Agent] Response received - Text: ${responseText.substring(0, 200)}${responseText.length > 200 ? "..." : ""}`);
       console.log(`[Agent] Function calls: ${functionCalls?.length || 0}, Parts: ${modelParts.length}`);
 
-      // Log any text/reasoning from Gemini (before or alongside function calls)
-      if (responseText && responseText.trim()) {
+      // Log ALL text parts from the response (captures reasoning, thoughts, etc.)
+      for (let i = 0; i < modelParts.length; i++) {
+        const part = modelParts[i] as Record<string, unknown>;
+        
+        // Log text parts (reasoning/thoughts)
+        if (part.text && typeof part.text === "string" && part.text.trim()) {
+          await logAgentMessage(incidentId, "thought", part.text);
+          console.log(`[Agent] Part ${i}: Thought logged (${(part.text as string).length} chars)`);
+        }
+        
+        // Log function call parts for visibility
+        if (part.functionCall) {
+          const fc = part.functionCall as { name?: string; args?: unknown };
+          console.log(`[Agent] Part ${i}: Function call - ${fc.name || "unknown"}`);
+        }
+        
+        // Log any thought signatures if present (Gemini 2.0+ feature)
+        if (part.thoughtSignature) {
+          await logAgentMessage(incidentId, "thought_signature", JSON.stringify({ index: i, hasSignature: true }));
+          console.log(`[Agent] Part ${i}: Has thought signature`);
+        }
+      }
+
+      // Also log the combined response text if not already covered by parts
+      if (responseText && responseText.trim() && modelParts.length === 0) {
         await logAgentMessage(incidentId, "gemini_response", responseText);
         console.log(`[Agent] Logged Gemini text response to database`);
       }
 
       if (!functionCalls || functionCalls.length === 0) {
         console.log(`[Agent] No function calls - ending turn loop`);
+        await logAgentMessage(incidentId, "turn_end", JSON.stringify({ turn: turn + 1, reason: "no_function_calls" }));
         break;
       }
 
@@ -110,6 +137,9 @@ export async function runAgent(incidentId: number): Promise<void> {
         const args = call.args || {};
 
         await logToolCall(session.id, name, args);
+        
+        // Log tool execution start
+        await logAgentMessage(incidentId, "tool_start", JSON.stringify({ name, args }));
 
         if (name === "finish") {
           const finishArgs = args as { reason: string; summary: string };
@@ -120,12 +150,23 @@ export async function runAgent(incidentId: number): Promise<void> {
         try {
           const result = await executeTool(ctx, name, args as Record<string, unknown>);
           await updateToolResult(session.id, name, result);
+          
+          // Log tool execution success
+          await logAgentMessage(incidentId, "tool_result", JSON.stringify({ 
+            name, 
+            success: true, 
+            resultPreview: result.substring(0, 500) + (result.length > 500 ? "..." : "")
+          }));
+          
           functionResponseParts.push({
             functionResponse: { name, response: { success: true, result } },
           });
         } catch (err) {
           const error = err instanceof Error ? err.message : String(err);
           await updateToolResult(session.id, name, null, error);
+          
+          // Log tool execution error
+          await logAgentMessage(incidentId, "tool_error", JSON.stringify({ name, error }));
           
           // Track if PR was skipped (dry-run mode)
           if (err instanceof PrSkippedError) {
@@ -148,6 +189,9 @@ export async function runAgent(incidentId: number): Promise<void> {
         role: "user",
         parts: functionResponseParts,
       });
+      
+      // Log turn completion
+      await logAgentMessage(incidentId, "turn_end", JSON.stringify({ turn: turn + 1, reason: "tools_executed" }));
     }
 
     await updateSession(session.id, { status: "completed", endedAt: new Date() });
@@ -222,17 +266,10 @@ async function handleFinish(
 }
 
 async function getPrUrl(ctx: ToolContext): Promise<string | null> {
-  try {
-    const { data } = await ctx.octokit.pulls.list({
-      owner: ctx.owner,
-      repo: ctx.repo,
-      head: `${ctx.owner}:${ctx.branch}`,
-      state: "open",
-    });
-    return data[0]?.html_url || null;
-  } catch {
-    return null;
-  }
+  // PR URL is now captured directly from createPullRequest result
+  // This function is kept for compatibility but returns null
+  // The actual PR URL is logged in finish tool call output
+  return null;
 }
 
 async function logToolCall(sessionId: number, name: string, args: unknown): Promise<void> {

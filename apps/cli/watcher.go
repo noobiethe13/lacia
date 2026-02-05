@@ -78,15 +78,15 @@ type LogEvent struct {
 }
 
 type Watcher struct {
-	path             string
-	file             *os.File
-	reader           *bufio.Reader
-	lineBuffer       []string
-	bufferSize       int
-	collectingTrace  bool
-	traceLines       []string
-	traceTimeout     time.Time
-	traceDuration    time.Duration
+	path            string
+	file            *os.File
+	reader          *bufio.Reader
+	lineBuffer      []string
+	bufferSize      int
+	collectingTrace bool
+	traceLines      []string
+	traceTimeout    time.Time
+	traceDuration   time.Duration
 }
 
 func NewWatcher(path string) (*Watcher, error) {
@@ -106,7 +106,7 @@ func NewWatcher(path string) (*Watcher, error) {
 		reader:        bufio.NewReader(file),
 		lineBuffer:    make([]string, 0, 50),
 		bufferSize:    50,
-		traceDuration: 300 * time.Millisecond,
+		traceDuration: 1000 * time.Millisecond, // 1 second to capture full stack traces
 	}, nil
 }
 

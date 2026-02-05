@@ -44,9 +44,10 @@ export default async function DashboardPage() {
   const stats = await getStats();
   const incidents = await getRecentIncidents();
   
-  const formattedIncidents = incidents.map(inc => ({
+  const formattedIncidents = incidents.map((inc) => ({
     id: inc.id,
     slug: `INC-${inc.id}`,
+    source: inc.hostname || "Unknown Host",
     repo_url: inc.repoUrl || "Unknown Repo",
     context: inc.context || inc.errorLog || "No context provided",
     payload: "{}",
@@ -57,9 +58,6 @@ export default async function DashboardPage() {
        started_at: inc.session.startedAt ? inc.session.startedAt.toISOString() : new Date().toISOString()
     }] : []
   }));
-
-  const maxConcurrency = 10;
-  const activePercentage = Math.min((stats.active / maxConcurrency) * 100, 100);
 
   return (
     <div className="min-h-screen bg-background text-foreground selection:bg-primary/20">
@@ -92,7 +90,7 @@ export default async function DashboardPage() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
            {[
              { label: "Total Incidents", value: stats.total, sub: "Lifetime count", color: "text-foreground" },
-             { label: "Active Agents", value: stats.active, sub: `${activePercentage}% Capacity`, color: "text-indigo-500", progress: true },
+             { label: "Active Agents", value: stats.active, sub: "Currently running", color: "text-indigo-500" },
              { label: "Resolved", value: stats.resolved, sub: "Successfully fixed", color: "text-emerald-500" },
              { label: "Failed", value: stats.failed, sub: "Requires intervention", color: "text-red-500" },
            ].map((stat, i) => (
@@ -104,21 +102,9 @@ export default async function DashboardPage() {
                   </div>
                   
                   <div className="mt-4">
-                     {stat.progress ? (
-                       <div className="space-y-2">
-                         <div className="h-1.5 w-full bg-muted/50 rounded-full overflow-hidden">
-                            <div 
-                              className="h-full bg-indigo-500 rounded-full transition-all duration-1000 ease-out" 
-                              style={{ width: `${activePercentage}%` }}
-                            />
-                         </div>
-                         <div className="text-xs text-muted-foreground text-right font-medium">{stat.sub}</div>
-                       </div>
-                     ) : (
-                       <div className="text-xs text-muted-foreground font-medium flex items-center gap-1 group-hover:text-foreground transition-colors">
-                         {stat.sub}
-                       </div>
-                     )}
+                    <div className="text-xs text-muted-foreground font-medium flex items-center gap-1 group-hover:text-foreground transition-colors">
+                      {stat.sub}
+                    </div>
                   </div>
                 </div>
              </div>

@@ -64,9 +64,17 @@ export function DashboardOverview({ initialIncidents, stats: initialStats }: Das
       const response = await fetch("/api/dashboard");
       if (response.ok) {
         const data = await response.json();
-        setIncidents(data.incidents);
-        setStats(data.stats);
-        setLastUpdated(new Date());
+        // Only update if we received valid data
+        if (Array.isArray(data.incidents)) {
+          // If we got an empty list but had data before, it might be a read error.
+          // In a real app with deletion, we'd need a better signal. 
+          // For this demo, let's assume incidents don't disappear unless cleared.
+          // BUT: We want to show real empty state if DB is truly empty.
+          // Compromise: only update if not null. 
+          setIncidents(data.incidents);
+          setStats(data.stats);
+          setLastUpdated(new Date());
+        }
       }
     } catch (error) {
       console.error("Failed to fetch dashboard data:", error);

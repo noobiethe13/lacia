@@ -3,18 +3,17 @@ import { promisify } from "util";
 import * as fs from "fs/promises";
 import * as path from "path";
 import simpleGit, { SimpleGit } from "simple-git";
-import { Octokit } from "@octokit/rest";
+import { parseRepoUrl, createPullRequest, getDefaultBranch, RepoInfo } from "../git-provider";
 
 const execAsync = promisify(exec);
 
 export interface ToolContext {
   workDir: string;
   repoUrl: string;
-  owner: string;
-  repo: string;
+  repoInfo: RepoInfo;
   branch: string;
+  defaultBranch?: string; // Cached default branch from the repo
   git: SimpleGit;
-  octokit: Octokit;
 }
 
 export async function executeReadFile(
@@ -116,33 +115,53 @@ export async function executeCreatePR(
   ctx: ToolContext,
   args: { title: string; body: string }
 ): Promise<string> {
+  const token = process.env.GIT_TOKEN;
+  
+  console.log(`[PR] Starting PR creation for branch: ${ctx.branch}`);
+  console.log(`[PR] Repo: ${ctx.repoInfo.owner}/${ctx.repoInfo.repo} (${ctx.repoInfo.provider})`);
+  console.log(`[PR] Token present: ${token ? "yes (length: " + token.length + ")" : "NO"}`);
+  
   // Check for token - if missing, skip PR creation (dry-run mode)
-  if (!process.env.GITHUB_TOKEN) {
+  if (!token) {
     throw new PrSkippedError(
-      `[DRY-RUN] No GITHUB_TOKEN set. Fix was applied locally but PR not created. ` +
+      `[DRY-RUN] No GIT_TOKEN set. Fix was applied locally but PR not created. ` +
       `Title: "${args.title}" | Files modified can be seen in previous tool calls.`
     );
   }
 
+  // Get the default branch (use cached value if available)
+  let targetBranch = ctx.defaultBranch;
+  if (!targetBranch) {
+    targetBranch = await getDefaultBranch(ctx.repoInfo, token);
+    ctx.defaultBranch = targetBranch; // Cache it
+  }
+  console.log(`[PR] Target branch: ${targetBranch}`);
+
   try {
+    console.log(`[PR] Pushing branch ${ctx.branch} to origin...`);
     await ctx.git.push("origin", ctx.branch, ["--set-upstream"]);
+    console.log(`[PR] Push successful`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    console.error(`[PR] Push failed: ${message}`);
     throw new Error(`Failed to push branch: ${message}`);
   }
 
   try {
-    const { data } = await ctx.octokit.pulls.create({
-      owner: ctx.owner,
-      repo: ctx.repo,
+    console.log(`[PR] Creating pull request: ${ctx.branch} -> ${targetBranch}...`);
+    const result = await createPullRequest(ctx.repoInfo, token, {
       title: args.title,
       body: args.body,
-      head: ctx.branch,
-      base: "main",
+      sourceBranch: ctx.branch,
+      targetBranch: targetBranch,
     });
-    return `PR created: ${data.html_url}`;
+    
+    const prType = ctx.repoInfo.provider === "gitlab" ? "MR" : "PR";
+    console.log(`[PR] ${prType} created successfully: ${result.url}`);
+    return `${prType} created: ${result.url}`;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    console.error(`[PR] PR creation failed: ${message}`);
     throw new Error(`Failed to create PR: ${message}`);
   }
 }

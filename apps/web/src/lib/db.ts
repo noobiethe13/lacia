@@ -11,43 +11,70 @@ type SqlParams = SqlValue[];
 // Database path
 const DB_PATH = process.env.DATABASE_PATH || path.join(process.cwd(), 'data', 'lacia.db');
 
-let db: Database | null = null;
-let SQL: Awaited<ReturnType<typeof initSqlJs>> | null = null;
+// Use globalThis to persist DB across Next.js module reloads in production
+// This is the standard pattern for database connections in Next.js
+const globalForDb = globalThis as typeof globalThis & {
+  sqlJsDb: Database | null;
+  sqlJs: Awaited<ReturnType<typeof initSqlJs>> | null;
+  dbInitPromise: Promise<Database> | null;
+};
 
-// Initialize database
+// Initialize globals if not set
+globalForDb.sqlJsDb = globalForDb.sqlJsDb ?? null;
+globalForDb.sqlJs = globalForDb.sqlJs ?? null;
+globalForDb.dbInitPromise = globalForDb.dbInitPromise ?? null;
+
+// Initialize database with mutex to prevent race conditions
 async function initDB(): Promise<Database> {
-  if (db) return db;
+  // Fast path: already initialized
+  if (globalForDb.sqlJsDb) return globalForDb.sqlJsDb;
   
-  // For server-side Node.js, load WASM from node_modules
-  const wasmPath = path.join(process.cwd(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm');
+  // Mutex: if initialization is in progress, wait for it
+  if (globalForDb.dbInitPromise) return globalForDb.dbInitPromise;
   
-  let wasmBinary: ArrayBuffer | undefined;
-  if (fs.existsSync(wasmPath)) {
-    const buffer = fs.readFileSync(wasmPath);
-    wasmBinary = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
-  }
+  // Start initialization and store the promise
+  globalForDb.dbInitPromise = (async () => {
+    // Double-check in case another caller completed while we waited
+    if (globalForDb.sqlJsDb) return globalForDb.sqlJsDb;
+    
+    console.log(`[DB] Initializing database at: ${DB_PATH}`);
+    
+    // For server-side Node.js, load WASM from node_modules
+    const wasmPath = path.join(process.cwd(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm');
+    
+    let wasmBinary: ArrayBuffer | undefined;
+    if (fs.existsSync(wasmPath)) {
+      const buffer = fs.readFileSync(wasmPath);
+      wasmBinary = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+    }
+    
+    globalForDb.sqlJs = await initSqlJs({
+      wasmBinary,
+    });
+    
+    // Ensure data directory exists
+    const dataDir = path.dirname(DB_PATH);
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    
+    // Load existing database or create new one
+    if (fs.existsSync(DB_PATH)) {
+      console.log(`[DB] Loading existing database from disk`);
+      const fileBuffer = fs.readFileSync(DB_PATH);
+      globalForDb.sqlJsDb = new globalForDb.sqlJs.Database(fileBuffer);
+      console.log(`[DB] Database loaded, size: ${fileBuffer.length} bytes`);
+    } else {
+      console.log(`[DB] Creating new database`);
+      globalForDb.sqlJsDb = new globalForDb.sqlJs.Database();
+      createTables(globalForDb.sqlJsDb);
+      saveDB();
+    }
+    
+    return globalForDb.sqlJsDb;
+  })();
   
-  SQL = await initSqlJs({
-    wasmBinary,
-  });
-  
-  // Ensure data directory exists
-  const dataDir = path.dirname(DB_PATH);
-  if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-  }
-  
-  // Load existing database or create new one
-  if (fs.existsSync(DB_PATH)) {
-    const fileBuffer = fs.readFileSync(DB_PATH);
-    db = new SQL.Database(fileBuffer);
-  } else {
-    db = new SQL.Database();
-    createTables(db);
-    saveDB();
-  }
-  
-  return db;
+  return globalForDb.dbInitPromise;
 }
 
 // Create tables
@@ -105,12 +132,25 @@ function createTables(database: Database): void {
   `);
 }
 
-// Save database to file
+// Save database to disk atomically
 function saveDB(): void {
-  if (!db) return;
-  const data = db.export();
+  if (!globalForDb.sqlJsDb) return;
+  const data = globalForDb.sqlJsDb.export();
   const buffer = Buffer.from(data);
-  fs.writeFileSync(DB_PATH, buffer);
+  const tempPath = `${DB_PATH}.tmp`;
+  
+  try {
+    // Write to temp file first
+    fs.writeFileSync(tempPath, buffer);
+    // Atomic rename to actual path (prevents partial reads)
+    fs.renameSync(tempPath, DB_PATH);
+  } catch (error) {
+    console.error("Failed to save database:", error);
+    // Try to clean up temp file if it exists
+    if (fs.existsSync(tempPath)) {
+      try { fs.unlinkSync(tempPath); } catch {}
+    }
+  }
 }
 
 // Helper to convert row to typed object
@@ -120,10 +160,10 @@ function rowToIncident(row: Record<string, unknown>): Incident {
     errorLog: row.error_log as string,
     status: row.status as string,
     hostname: row.hostname as string,
-    repoUrl: row.repo_url as string | null,
-    context: row.context as string | null,
+    repoUrl: row.repo_url as string || null,
+    context: row.context as string || null,
     prCreated: Boolean(row.pr_created),
-    prUrl: row.pr_url as string | null,
+    prUrl: row.pr_url as string || null,
     createdAt: new Date(row.created_at as string),
   };
 }
@@ -180,15 +220,18 @@ export async function getIncidents(): Promise<Incident[]> {
 
 export async function getIncidentById(id: number): Promise<Incident | null> {
   const database = await initDB();
+  console.log(`[DB] getIncidentById(${id}) called`);
   const stmt = database.prepare('SELECT * FROM incidents WHERE id = ?');
   stmt.bind([id]);
   
   if (stmt.step()) {
     const row = stmt.getAsObject();
     stmt.free();
+    console.log(`[DB] getIncidentById(${id}) found row`);
     return rowToIncident(row as Record<string, unknown>);
   }
   stmt.free();
+  console.log(`[DB] getIncidentById(${id}) - NOT FOUND`);
   return null;
 }
 
@@ -199,18 +242,64 @@ export async function createIncident(data: {
   context?: string;
 }): Promise<Incident> {
   const database = await initDB();
+  
+  console.log(`[DB] createIncident called with repoUrl: ${data.repoUrl}`);
+  
+  // Check for duplicates created in the last 10 seconds
+  const stmt = database.prepare(`
+    SELECT id, created_at FROM incidents 
+    WHERE error_log = ? 
+    AND created_at > datetime('now', '-10 seconds')
+    ORDER BY created_at DESC LIMIT 1
+  `);
+  stmt.bind([data.errorLog]);
+  
+  if (stmt.step()) {
+    const row = stmt.getAsObject();
+    stmt.free();
+    console.log(`[DB] Skipping duplicate incident (matched ID ${row.id})`);
+    const existingIncident = await getIncidentById(row.id as number);
+    if (existingIncident) return existingIncident;
+    throw new Error("Failed to retrieve existing incident after duplicate check");
+  }
+  stmt.free();
+
+  // Use database.run() directly for more reliable INSERT
+  console.log(`[DB] Inserting new incident...`);
   database.run(
     `INSERT INTO incidents (error_log, hostname, repo_url, context) VALUES (?, ?, ?, ?)`,
     [data.errorLog, data.hostname || 'unknown', data.repoUrl || null, data.context || null]
   );
   
-  const result = database.exec('SELECT last_insert_rowid() as id');
-  const id = result[0].values[0][0] as number;
+  // Get the created incident ID
+  const idResult = database.exec('SELECT last_insert_rowid() as id');
+  if (!idResult[0] || !idResult[0].values[0]) {
+    console.error(`[DB] Failed to get last_insert_rowid, result:`, idResult);
+    throw new Error("Failed to get inserted incident ID");
+  }
+  const id = idResult[0].values[0][0] as number;
+  
+  console.log(`[DB] Inserted incident with ID: ${id}`);
+  
+  // Verify the insert worked by checking row count
+  const countResult = database.exec('SELECT COUNT(*) as cnt FROM incidents');
+  console.log(`[DB] Total incidents in DB: ${countResult[0]?.values[0]?.[0]}`);
+  
+  // Save to disk
   saveDB();
   
-  return (await getIncidentById(id))!;
+  const newIncident = await getIncidentById(id);
+  if (!newIncident) {
+    console.error(`[DB] getIncidentById(${id}) returned null after insert!`);
+    // Debug: try raw query
+    const debugResult = database.exec(`SELECT * FROM incidents WHERE id = ${id}`);
+    console.error(`[DB] Raw query result:`, debugResult);
+    throw new Error("Failed to retrieve created incident");
+  }
+  
+  console.log(`[DB] Successfully created incident ${id}`);
+  return newIncident;
 }
-
 export async function updateIncident(id: number, data: Partial<{
   status: string;
   prCreated: boolean;

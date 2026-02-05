@@ -6,8 +6,10 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - DATABASE_URL=file:/app/data/lacia.db
+      - DATABASE_PATH=/app/data/lacia.db
       - NODE_ENV=production
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GIT_TOKEN=${GIT_TOKEN}
     volumes:
       - lacia-data:/app/data
     restart: unless-stopped
