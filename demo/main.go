@@ -227,7 +227,7 @@ func startDocker() error {
 
 	// Always build fresh with --no-cache to ensure code changes are applied
 	fmt.Println("   Building fresh Docker image (this may take a minute)...")
-	cmd := exec.Command("docker", "compose", "-f", composeFile, "build", "--no-cache")
+	cmd := exec.Command("docker", "compose", "-f", composeFile, "build")
 	cmd.Dir = projectRoot
 	cmd.Env = os.Environ()
 	cmd.Stdout = os.Stdout

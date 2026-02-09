@@ -16,7 +16,7 @@ import { cloneRepo, buildFileTree, cleanup, CloneError } from "@/lib/git";
 import { parseRepoUrl } from "@/lib/git-provider";
 import simpleGit from "simple-git";
 
-const MAX_TURNS = 30;
+const MAX_TURNS = 50;
 
 export async function runAgent(incidentId: number): Promise<void> {
   const incident = await getIncidentById(incidentId);
