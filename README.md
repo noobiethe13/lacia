@@ -117,5 +117,14 @@ The Watcher will now monitor your log file. When a stack trace appears, it sends
 - **Database:** SQLite (via sql.js, with persistent storage)
 - **CLI:** Go (Standard Library)
 
+## 🧠 Powered by Gemini 3 Pro
+
+Lacia leverages the cutting-edge capabilities of **Google Gemini 3 Pro** to deliver autonomous SRE agent performance:
+
+- **1 Million Context Window**: Lacia injects entire codebase hierarchy and necessary file contents into the context, allowing for deep understanding of complex dependencies and architectural patterns without hallucination.
+- **Advanced Reasoning**: Capable of multi-step problem solving, from root cause analysis of stack traces to navigating through function calls across multiple files.
+- **Advanced Tool Calling**: Utilizes a robust suite of tools to read files, run tests, and search the codebase, mimicking a senior engineer's debugging workflow.
+- **Expert Coding**: Expert-level code generation and refactoring capabilities across multiple languages, ensuring fixes match your project's style and best practices.
+
 ## License
 MIT
